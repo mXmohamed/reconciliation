@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Réconciliation Fibre Optique - Simple</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.3.2/papaparse.min.js"></script>
+    <style>
+        .file-upload {
+            margin-bottom: 20px;
+            padding: 15px;
+            border: 2px dashed #ccc;
+            border-radius: 5px;
+            text-align: center;
+            background-color: #f8f9fa;
+            transition: all 0.3s;
+        }
+        .file-upload:hover {
+            border-color: #0d6efd;
+            background-color: #e9ecef;
+        }
+        .table-container {
+            max-height: 500px;
+            overflow-y: auto;
+            margin-bottom: 20px;
+        }
+        #results {
+            display: none;
+        }
+        .loading {
+            display: none;
+            text-align: center;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-4 mb-5">
+        <h1 class="text-center mb-4">Réconciliation Fibre Optique</h1>
+        <p class="text-center">Cette application permet d'identifier les positions présentes dans le relevé terrain mais absentes de la base de données.</p>
+        
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card mb-4">
+                    <div class="card-header bg-primary text-white">
+                        <h5 class="card-title mb-0">Fichier CSV Base de Données (ROP_BROP)</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="file-upload">
+                            <input type="file" id="csvFile" class="form-control" accept=".csv">
+                            <small class="text-muted d-block mt-2">Format: CSV avec séparateur ";"</small>
+                        </div>
+                        <div id="csvInfo" class="alert alert-info">
+                            Sélectionnez le fichier ROP_BROP.csv
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-6">
+                <div class="card mb-4">
+                    <div class="card-header bg-success text-white">
+                        <h5 class="card-title mb-0">Fichier Excel Relevé Terrain</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="file-upload">
+                            <input type="file" id="excelFile" class="form-control" accept=".xlsx, .xls">
+                            <small class="text-muted d-block mt-2">Format: Excel (.xlsx, .xls)</small>
+                        </div>
+                        <div id="excelInfo" class="alert alert-info">
+                            Sélectionnez le fichier Releve_Terrain.xlsx
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="text-center mb-4">
+            <button id="analyzeBtn" class="btn btn-primary btn-lg" disabled>Analyser les fichiers</button>
+        </div>
+        
+        <div id="loading" class="loading">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Chargement...</span>
+            </div>
+            <p class="mt-2">Analyse en cours, veuillez patienter...</p>
+        </div>
+        
+        <div id="results">
+            <h2 class="mt-4 mb-3">Résultats de la réconciliation</h2>
+            
+            <div class="card mb-4">
+                <div class="card-header bg-danger text-white d-flex justify-content-between align-items-center">
+                    <h5 class="card-title mb-0">Positions présentes dans le terrain mais absentes dans la base de données</h5>
+                    <span id="missingCount" class="badge bg-light text-dark">0 résultats</span>
+                </div>
+                <div class="card-body">
+                    <div class="table-container">
+                        <table id="missingTable" class="table table-striped table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Référence PM</th>
+                                    <th>Module PM</th>
+                                    <th>Position</th>
+                                    <th>Arrêtier</th>
+                                    <th>MOD/PORT</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <!-- Données insérées par JavaScript -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="card mb-4">
+                <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                    <h5 class="card-title mb-0">Analyse des modules</h5>
+                    <span id="moduleCount" class="badge bg-light text-dark">0 modules</span>
+                </div>
+                <div class="card-body">
+                    <div class="table-container">
+                        <table id="moduleTable" class="table table-striped table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Module</th>
+                                    <th>Présent en BD</th>
+                                    <th>Positions manquantes</th>
+                                    <th>PBO rattachés (en BD)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <!-- Données insérées par JavaScript -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="text-center mb-4">
+                <button id="exportBtn" class="btn btn-success btn-lg">Exporter les résultats</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Variables globales
+        let csvData = null;
+        let excelData = null;
+        let analysisResult = {
+            missingPositions: [],
+            modules: {}
+        };
+        
+        // Éléments DOM
+        const csvFileInput = document.getElementById('csvFile');
+        const excelFileInput = document.getElementById('excelFile');
+        const csvInfo = document.getElementById('csvInfo');
+        const excelInfo = document.getElementById('excelInfo');
+        const analyzeBtn = document.getElementById('analyzeBtn');
+        const loadingElement = document.getElementById('loading');
+        const resultsElement = document.getElementById('results');
+        const exportBtn = document.getElementById('exportBtn');
+        
+        // Écouteurs d'événements
+        csvFileInput.addEventListener('change', handleCsvFile);
+        excelFileInput.addEventListener('change', handleExcelFile);
+        analyzeBtn.addEventListener('click', analyzeFiles);
+        exportBtn.addEventListener('click', exportResults);
+        
+        // Fonctions pour gérer les fichiers
+        function handleCsvFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            csvInfo.className = 'alert alert-info';
+            csvInfo.textContent = 'Chargement du fichier...';
+            
+            Papa.parse(file, {
+                header: true,
+                delimiter: ';',
+                skipEmptyLines: true,
+                complete: function(results) {
+                    if (results.errors.length > 0) {
+                        console.error('Erreurs CSV:', results.errors);
+                        csvInfo.className = 'alert alert-danger';
+                        csvInfo.textContent = `Erreur: ${results.errors[0].message}`;
+                        return;
+                    }
+                    
+                    csvData = results.data;
+                    csvInfo.className = 'alert alert-success';
+                    csvInfo.textContent = `${csvData.length} entrées chargées avec succès`;
+                    checkFilesLoaded();
+                },
+                error: function(error) {
+                    console.error('Erreur:', error);
+                    csvInfo.className = 'alert alert-danger';
+                    csvInfo.textContent = 'Erreur lors du chargement du fichier';
+                }
+            });
+        }
+        
+        function handleExcelFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            excelInfo.className = 'alert alert-info';
+            excelInfo.textContent = 'Chargement du fichier...';
+            
+            const reader = new FileReader();
+            
+            reader.onload = function(e) {
+                try {
+                    const data = new Uint8Array(e.target.result);
+                    const workbook = XLSX.read(data, {type: 'array'});
+                    
+                    // Prendre la première feuille
+                    const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+                    excelData = XLSX.utils.sheet_to_json(firstSheet);
+                    
+                    excelInfo.className = 'alert alert-success';
+                    excelInfo.textContent = `${excelData.length} entrées chargées avec succès`;
+                    
+                    // Afficher un exemple pour le débogage
+                    console.log('Exemple de données Excel:', excelData.slice(0, 2));
+                    checkFilesLoaded();
+                } catch (error) {
+                    console.error('Erreur Excel:', error);
+                    excelInfo.className = 'alert alert-danger';
+                    excelInfo.textContent = `Erreur: ${error.message}`;
+                }
+            };
+            
+            reader.onerror = function() {
+                excelInfo.className = 'alert alert-danger';
+                excelInfo.textContent = 'Erreur lors de la lecture du fichier';
+            };
+            
+            reader.readAsArrayBuffer(file);
+        }
+        
+        function checkFilesLoaded() {
+            analyzeBtn.disabled = !(csvData && excelData);
+        }
+        
+        // Fonction principale d'analyse
+        function analyzeFiles() {
+            // Afficher le chargement
+            loadingElement.style.display = 'block';
+            analyzeBtn.disabled = true;
+            resultsElement.style.display = 'none';
+            
+            // Effectuer l'analyse après un court délai pour permettre au navigateur de mettre à jour l'interface
+            setTimeout(function() {
+                // Nettoyer les résultats précédents
+                analysisResult.missingPositions = [];
+                analysisResult.modules = {};
+                
+                try {
+                    // Créer un index des positions dans la base de données
+                    const dbPositions = new Set();
+                    const dbModules = new Set();
+                    const moduleToPbo = {};
+                    const pbosByModule = {};
+                    
+                    console.log('Analyse des données de la base...');
+                    
+                    // Parcourir les données de la base
+                    csvData.forEach(row => {
+                        const moduleRef = row["reference module PM"];
+                        const position = row["position module PM"];
+                        const pboRef = row["reference PBO"];
+                        
+                        if (moduleRef) {
+                            // Enregistrer le module
+                            dbModules.add(moduleRef);
+                            
+                            // Ajouter la position si elle existe
+                            if (position) {
+                                // Clé unique pour la combinaison module+position
+                                dbPositions.add(`${moduleRef}#${position}`);
+                            }
+                            
+                            // Ajouter le PBO s'il existe
+                            if (pboRef) {
+                                if (!pbosByModule[moduleRef]) {
+                                    pbosByModule[moduleRef] = new Set();
+                                }
+                                pbosByModule[moduleRef].add(pboRef);
+                            }
+                        }
+                    });
+                    
+                    console.log('Analyse des données terrain...');
+                    
+                    // Structure pour stocker les modules du terrain et leurs positions
+                    const terrainModules = {};
+                    
+                    // Parcourir les données terrain
+                    excelData.forEach(row => {
+                        // Récupérer les valeurs des colonnes
+                        const refPM = row["REFERENCE_PM_terrain"] || '';
+                        const moduleRef = row["NOM_MODULE_PM_terrain"] || '';
+                        const position = row["MODULE_"] || '';
+                        const arretier = row["ARRETIER"] || '';
+                        const modPort = row["MOD/PORT"] || '';
+                        
+                        if (moduleRef && position) {
+                            // Ajouter le module à la liste des modules terrain s'il n'existe pas déjà
+                            if (!terrainModules[moduleRef]) {
+                                terrainModules[moduleRef] = {
+                                    positions: new Set(),
+                                    missingPositions: []
+                                };
+                            }
+                            
+                            // Ajouter la position au module
+                            terrainModules[moduleRef].positions.add(position);
+                            
+                            // Vérifier si la combinaison module+position existe dans la base
+                            const key = `${moduleRef}#${position}`;
+                            if (!dbPositions.has(key)) {
+                                // Si la position est manquante, l'ajouter à la liste
+                                analysisResult.missingPositions.push({
+                                    refPM,
+                                    moduleRef,
+                                    position,
+                                    arretier,
+                                    modPort
+                                });
+                                
+                                // Ajouter également à la liste des positions manquantes du module
+                                terrainModules[moduleRef].missingPositions.push(position);
+                            }
+                        }
+                    });
+                    
+                    // Construire l'analyse des modules
+                    Object.keys(terrainModules).forEach(moduleRef => {
+                        analysisResult.modules[moduleRef] = {
+                            presentInDB: dbModules.has(moduleRef),
+                            missingPositions: terrainModules[moduleRef].missingPositions,
+                            pbos: pbosByModule[moduleRef] ? Array.from(pbosByModule[moduleRef]) : []
+                        };
+                    });
+                    });
+                    
+                    // Afficher les résultats
+                    displayResults();
+                    
+                } catch (error) {
+                    console.error('Erreur lors de l\'analyse:', error);
+                    alert('Une erreur s\'est produite lors de l\'analyse des fichiers. Consultez la console pour plus de détails.');
+                }
+                
+                // Masquer le chargement
+                loadingElement.style.display = 'none';
+                analyzeBtn.disabled = false;
+                resultsElement.style.display = 'block';
+            }, 100);
+        }
+        
+        // Fonction pour afficher les résultats
+        function displayResults() {
+            // Afficher les positions manquantes
+            const missingTable = document.getElementById('missingTable').getElementsByTagName('tbody')[0];
+            missingTable.innerHTML = '';
+            
+            if (analysisResult.missingPositions.length === 0) {
+                const row = missingTable.insertRow();
+                const cell = row.insertCell(0);
+                cell.colSpan = 5;
+                cell.textContent = 'Aucune position manquante trouvée';
+                cell.className = 'text-center';
+            } else {
+                analysisResult.missingPositions.forEach(item => {
+                    const row = missingTable.insertRow();
+                    
+                    row.insertCell(0).textContent = item.refPM;
+                    row.insertCell(1).textContent = item.moduleRef;
+                    row.insertCell(2).textContent = item.position;
+                    row.insertCell(3).textContent = item.arretier;
+                    row.insertCell(4).textContent = item.modPort;
+                });
+            }
+            
+            // Mettre à jour le compteur
+            document.getElementById('missingCount').textContent = 
+                `${analysisResult.missingPositions.length} position${analysisResult.missingPositions.length !== 1 ? 's' : ''}`;
+            
+            // Afficher l'analyse des modules
+            const moduleTable = document.getElementById('moduleTable').getElementsByTagName('tbody')[0];
+            moduleTable.innerHTML = '';
+            
+            const modules = Object.keys(analysisResult.modules);
+            
+            if (modules.length === 0) {
+                const row = moduleTable.insertRow();
+                const cell = row.insertCell(0);
+                cell.colSpan = 5;
+                cell.textContent = 'Aucun module trouvé';
+                cell.className = 'text-center';
+            } else {
+                modules.forEach(moduleRef => {
+                    const moduleInfo = analysisResult.modules[moduleRef];
+                    
+                    const row = moduleTable.insertRow();
+                    
+                    row.insertCell(0).textContent = moduleRef;
+                    
+                    const presentCell = row.insertCell(1);
+                    presentCell.textContent = moduleInfo.presentInDB ? 'Oui' : 'Non';
+                    presentCell.className = moduleInfo.presentInDB ? 'text-success' : 'text-danger';
+                    
+                    row.insertCell(2).textContent = moduleInfo.positionsTerrain.size;
+                    
+                    const missingCell = row.insertCell(3);
+                    missingCell.textContent = moduleInfo.missingPositions.length;
+                    if (moduleInfo.missingPositions.length > 0) {
+                        missingCell.className = 'text-danger';
+                        missingCell.title = `Positions: ${moduleInfo.missingPositions.join(', ')}`;
+                    }
+                    
+                    row.insertCell(4).textContent = moduleInfo.pbos.length;
+                });
+            }
+            
+            // Mettre à jour le compteur de modules
+            document.getElementById('moduleCount').textContent = 
+                `${modules.length} module${modules.length !== 1 ? 's' : ''}`;
+        }
+        
+        // Fonction pour exporter les résultats
+        function exportResults() {
+            try {
+                // Créer un nouveau workbook
+                const wb = XLSX.utils.book_new();
+                
+                // Créer une feuille pour les positions manquantes
+                const missingData = analysisResult.missingPositions.map(item => ({
+                    'Référence PM': item.refPM,
+                    'Module PM': item.moduleRef,
+                    'Position': item.position,
+                    'Arrêtier': item.arretier,
+                    'MOD/PORT': item.modPort
+                }));
+                
+                const missingWS = XLSX.utils.json_to_sheet(missingData);
+                XLSX.utils.book_append_sheet(wb, missingWS, 'Positions Manquantes');
+                
+                // Créer une feuille pour l'analyse des modules
+                const moduleData = Object.keys(analysisResult.modules).map(moduleRef => {
+                    const moduleInfo = analysisResult.modules[moduleRef];
+                    return {
+                        'Module': moduleRef,
+                        'Présent en BD': moduleInfo.presentInDB ? 'Oui' : 'Non',
+                        'Positions Manquantes': moduleInfo.missingPositions.join(', '),
+                        'Nombre Positions Manquantes': moduleInfo.missingPositions.length,
+                        'Nombre PBO Rattachés': moduleInfo.pbos.length,
+                        'PBO Rattachés': moduleInfo.pbos.join(', ')
+                    };
+                });
+                
+                const moduleWS = XLSX.utils.json_to_sheet(moduleData);
+                XLSX.utils.book_append_sheet(wb, moduleWS, 'Analyse Modules');
+                
+                // Créer une feuille de résumé
+                const summaryData = [
+                    { 'Métrique': 'Nombre d\'entrées dans la base de données', 'Valeur': csvData.length },
+                    { 'Métrique': 'Nombre d\'entrées dans le relevé terrain', 'Valeur': excelData.length },
+                    { 'Métrique': 'Nombre de positions manquantes', 'Valeur': analysisResult.missingPositions.length },
+                    { 'Métrique': 'Nombre de modules analysés', 'Valeur': Object.keys(analysisResult.modules).length },
+                    { 'Métrique': 'Modules absents de la BD', 'Valeur': Object.values(analysisResult.modules).filter(m => !m.presentInDB).length }
+                ];
+                
+                const summaryWS = XLSX.utils.json_to_sheet(summaryData);
+                XLSX.utils.book_append_sheet(wb, summaryWS, 'Résumé');
+                
+                // Générer le fichier Excel
+                const date = new Date().toISOString().split('T')[0];
+                XLSX.writeFile(wb, `Reconciliation_Fibre_${date}.xlsx`);
+                
+            } catch (error) {
+                console.error('Erreur lors de l\'export:', error);
+                alert('Une erreur s\'est produite lors de l\'export des résultats.');
+            }
+        }
+    </script>
+</body>
+</html>
